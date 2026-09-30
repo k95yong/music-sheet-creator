@@ -32,6 +32,18 @@ The workspace root is configured by `MUSIC_SHEET_WORKSPACE`. The server creates 
 
 MusicXML TAB exports include `<technical><string>` and `<fret>` elements. The importer restores those values so manual fingering survives a save/load cycle.
 
+Sustained MusicXML ties are merged into one model note. The editable renderers derive measure-local display segments without changing the source note identity. Both notation exports use one writer, include continuation ties and TAB fingering, and preserve overlapping durations using MusicXML backup/forward elements.
+
+## Score playback and controls
+
+All scores use the same playback controller. With backing enabled, the audio element's current time is the clock for piano note scheduling and both playheads, so seeking and playback-rate changes stay aligned. Without backing, a monotonic clock plays the score alone. Tempo and meter are locked during a score session. Starting a new recording clears the old playback session and captures its own audio start position.
+
+The score's audio start position uses original-speed seconds and is saved in the MusicXML miscellaneous field `audio-offset-seconds`; files without it start at zero. There is no filename-specific playback behavior.
+
+The score toolbar separates listening/mixing, quantization, editing, and export. Piano gain and backing volume are independent. Additional per-measure recording/pitch-input tools live in an expandable section.
+
+Run `node scripts/check-score.js` for dependency-free score display, sustained-tie, export, fingering, and overlapping-duration regression checks.
+
 ## PDF generation
 
 The browser builds a small PDF 1.4 document directly from `quantizedScore`. Piano and TAB use separate render paths and are saved independently through the score upload API. PDFs use A4 landscape pages with four measures per row and three rows per page.
@@ -42,4 +54,4 @@ The browser builds a small PDF 1.4 document directly from `quantizedScore`. Pian
 - Project identifiers and filenames are normalized before filesystem access.
 - Upload sizes are bounded.
 - No remote persistence or analytics are used.
-
+- Score removal validates a direct child of the transcription folder and sends it to the Windows Recycle Bin. A failed recycle operation never falls back to permanent deletion.

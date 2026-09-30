@@ -3,6 +3,7 @@ import ctypes
 import json
 import mimetypes
 import os
+import subprocess
 import queue
 import re
 import sys
@@ -171,6 +172,35 @@ def project_path(project_id):
     return path
 
 
+def recycle_score_file(path, filename):
+    if not isinstance(filename, str) or not filename or filename in {".", ".."} or any(c in filename for c in '/\\:\x00'):
+        raise ValueError("잘못된 악보 파일명")
+    folder = path / "02_Transcription"
+    target = folder / filename
+    if folder.resolve().parent != path.resolve() or target.is_symlink() or target.resolve().parent != folder.resolve():
+        raise ValueError("악보 폴더 밖의 파일은 삭제할 수 없습니다.")
+    if not target.is_file():
+        raise FileNotFoundError("악보 파일을 찾지 못했습니다.")
+    # Keep filenames out of executable PowerShell text, including quotes and Unicode.
+    environment = os.environ.copy()
+    environment["MUSIC_SHEET_RECYCLE_PATH"] = str(target.resolve())
+    script = """$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName Microsoft.VisualBasic
+if (-not [Environment]::UserInteractive) { throw 'Recycle Bin requires an interactive Windows session' }
+[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile(
+    $env:MUSIC_SHEET_RECYCLE_PATH,
+    [Microsoft.VisualBasic.FileIO.UIOption]::OnlyErrorDialogs,
+    [Microsoft.VisualBasic.FileIO.RecycleOption]::SendToRecycleBin,
+    [Microsoft.VisualBasic.FileIO.UICancelOption]::ThrowException
+)"""
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+        env=environment, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    if result.returncode or target.exists():
+        raise OSError("휴지통으로 이동하지 못했습니다. 파일 사용 여부와 휴지통을 확인하세요.")
+
+
 def ensure_project(path, title=None):
     for folder in ("01_Reference", "02_Transcription", "03_Recordings", "04_Edits", "05_Mixes", "06_Masters", "07_Artwork", "08_Deliverables", "Notes"):
         (path / folder).mkdir(parents=True, exist_ok=True)
@@ -299,6 +329,14 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.json_response(200, load_project(path.name))
             if len(parts) >= 4 and parts[:2] == ["api", "projects"]:
                 project_id, action = parts[2], parts[3]; path = project_path(project_id); ensure_project(path)
+                if action == "recycle-score":
+                    if self.headers.get("Sec-Fetch-Site") == "cross-site" or self.headers.get("Origin") not in (None, f"http://127.0.0.1:{PORT}", f"http://localhost:{PORT}"):
+                        return self.json_response(403, {"error": "로컬 작업실에서만 삭제할 수 있습니다."})
+                    if self.headers.get_content_type() != "application/json":
+                        return self.json_response(415, {"error": "JSON 요청이 필요합니다."})
+                    filename = self.body_json().get("filename")
+                    recycle_score_file(path, filename)
+                    return self.json_response(200, {"ok": True, "file": filename, "scores": load_project(project_id)["scores"]})
                 if action == "meta":
                     data = self.body_json(); meta_path = path / "project.json"; meta = json.loads(meta_path.read_text(encoding="utf-8"))
                     for key in ("title", "key", "scale", "tempo", "timeSignature", "activeAudio"): meta[key] = str(data.get(key, meta.get(key, "")))[:500]
